@@ -17,16 +17,12 @@ clip vision: https://huggingface.co/google/siglip-so400m-patch14-384/tree/main d
 LLM: https://huggingface.co/unsloth/Meta-Llama-3.1-8B-Instruct download all files and place in ComfyUI\models\LLM\unsloth--Meta-Llama-3.1-8B-Instruct
 Joy capiton lora: https://huggingface.co/spaces/fancyfeast/joy-caption-alpha-two download all files and place in ComfyUI\models\Joy_caption\cgrkzexw-599808, i will suggest you use huggingface-cli to avoid mistaken on the names.
 
-make sure your folder sturcture like this:
-comfui
-  |
- models 
-  |--clip_vision
-  |   |--siglip-so400m-patch14-384
-  |--LLM
-  |   |--unsloth--Meta-Llama-3.1-8B-Instruct
-  |--Joy_caption
-      |--cgrkzexw-599808
+* Or you can download the models here and unzip it into your folder *
+* https://pan.baidu.com/s/1yYRlDKclehSPv-tUVwfVHw?pwd=b84c *
+
+Make sure your model is well placed as below.
+![image](https://github.com/user-attachments/assets/510d2e6b-db1f-4743-92f4-9a8ae80ef6dd)
+
 
 ![image](https://github.com/user-attachments/assets/9ae0a410-539e-49c5-a1b4-4434da02dc28)
 
@@ -54,7 +50,15 @@ comfui
 
 Enjoy!
 
+## Star History
 
+<a href="https://star-history.com/#TTPlanetPig/Comfyui_JC2&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=TTPlanetPig/Comfyui_JC2&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=TTPlanetPig/Comfyui_JC2&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=TTPlanetPig/Comfyui_JC2&type=Date" />
+ </picture>
+</a>
 
 
 
