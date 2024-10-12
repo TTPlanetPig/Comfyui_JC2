@@ -2,25 +2,40 @@
 
 Wrapped Joy Caption alpha 2 node for comfyui from https://huggingface.co/spaces/fancyfeast/joy-caption-alpha-two
 Easy use, for GPU with less 19G, please use nf4 for better balanced speed and result.
+This Node also took a reference from /chflame163/ComfyUI_LayerStyle and https://huggingface.co/John6666/joy-caption-alpha-two-cli-mod
 
 # Usage:
-
 -inside comfyui
--click comfyui manager
--Install Via git Url https://github.com/TTPlanetPig/Comfyui_JC2 or inside the folder ./comfyui/custom_nodes  run git clone https://github.com/TTPlanetPig/Comfyui_JC2
--for python_embeded comfyui version, inside folder ./comfyui/custom_nodes/Comfyui_JC2 run ../../../python_embeded/python.exe -m pip install -r requirements.txt
-I will assume you have the pytorch ready in your PC, in case you don't, install from here: pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121(NOT Recommended if you don't familar with embeded python)
 
+-click comfyui manager
+
+-Install Via git Url https://github.com/TTPlanetPig/Comfyui_JC2 or inside the folder ./comfyui/custom_nodes run 
+```shell
+git clone https://github.com/TTPlanetPig/Comfyui_JC2
+```
+-for python_embeded comfyui version, inside folder ./comfyui/custom_nodes/Comfyui_JC2 run 
+```shell
+../../../python_embeded/python.exe -m pip install -r requirements.txt
+```
+
+I will assume you have the pytorch ready in your PC, in case you don't, install from here: 
+```shell
+pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121  
+# (NOT Recommended if you don't familar with embeded python)
+```
 # Model preparation:
 
-clip vision: https://huggingface.co/google/siglip-so400m-patch14-384/tree/main download all files and place in ComfyUI\models\clip_vision\siglip-so400m-patch14-384
-LLM: https://huggingface.co/unsloth/Meta-Llama-3.1-8B-Instruct download all files and place in ComfyUI\models\LLM\unsloth--Meta-Llama-3.1-8B-Instruct
-Joy capiton lora: https://huggingface.co/spaces/fancyfeast/joy-caption-alpha-two download all files and place in ComfyUI\models\Joy_caption\cgrkzexw-599808, i will suggest you use huggingface-cli to avoid mistaken on the names.
+-clip vision: https://huggingface.co/google/siglip-so400m-patch14-384/tree/main download all files and place in ComfyUI\models\clip_vision\siglip-so400m-patch14-384
+
+-LLM: https://huggingface.co/unsloth/Meta-Llama-3.1-8B-Instruct download all files and place in ComfyUI\models\LLM\unsloth--Meta-Llama-3.1-8B-Instruct
+
+-Joy capiton lora: https://huggingface.co/spaces/fancyfeast/joy-caption-alpha-two download all files and place in ComfyUI\models\Joy_caption\cgrkzexw-599808, i will suggest you use huggingface-cli to avoid mistaken on the names.
 
 * Or you can download the models here and unzip it into your folder *
 * https://pan.baidu.com/s/1yYRlDKclehSPv-tUVwfVHw?pwd=b84c *
 
 Make sure your model is well placed as below.
+
 ![image](https://github.com/user-attachments/assets/510d2e6b-db1f-4743-92f4-9a8ae80ef6dd)
 
 
