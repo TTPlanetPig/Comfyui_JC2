@@ -1,0 +1,70 @@
+[
+    {
+        "name": "replace_character_names",
+        "prompt": "If there is a person/character in the image you must refer to them as {name}."
+    },
+    {
+        "name": "exclude_unchangeable_attributes",
+        "prompt": "Do NOT include information about people/characters that cannot be changed (like ethnicity, gender, etc), but do still include changeable attributes (like hair style)."
+    },
+    {
+        "name": "include_lighting_details",
+        "prompt": "Include information about lighting."
+    },
+    {
+        "name": "include_camera_angle",
+        "prompt": "Include information about camera angle."
+    },
+    {
+        "name": "mention_watermark_presence",
+        "prompt": "Include information about whether there is a watermark or not."
+    },
+    {
+        "name": "note_jpeg_artifacts",
+        "prompt": "Include information about whether there are JPEG artifacts or not."
+    },
+    {
+        "name": "include_exif_data",
+        "prompt": "If it is a photo you MUST include information about what camera was likely used and details such as aperture, shutter speed, ISO, etc."
+    },
+    {
+        "name": "exclude_sexual_content",
+        "prompt": "Do NOT include anything sexual; keep it PG."
+    },
+    {
+        "name": "exclude_image_resolution",
+        "prompt": "Do NOT mention the image's resolution."
+    },
+    {
+        "name": "describe_aesthetic_quality",
+        "prompt": "You MUST include information about the subjective aesthetic quality of the image from low to very high."
+    },
+    {
+        "name": "include_composition_style",
+        "prompt": "Include information on the image's composition style, such as leading lines, rule of thirds, or symmetry."
+    },
+    {
+        "name": "exclude_text_elements",
+        "prompt": "Do NOT mention any text that is in the image."
+    },
+    {
+        "name": "specify_depth_of_field",
+        "prompt": "Specify the depth of field and whether the background is in focus or blurred."
+    },
+    {
+        "name": "specify_lighting_sources",
+        "prompt": "If applicable, mention the likely use of artificial or natural lighting sources."
+    },
+    {
+        "name": "avoid_ambiguous_language",
+        "prompt": "Do NOT use any ambiguous language."
+    },
+    {
+        "name": "classify_image_as_sfw_nsfw",
+        "prompt": "Include whether the image is sfw, suggestive, or nsfw."
+    },
+    {
+        "name": "describe_key_elements_only",
+        "prompt": "ONLY describe the most important elements of the image."
+    }
+]
