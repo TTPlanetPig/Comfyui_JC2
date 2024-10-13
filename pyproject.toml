@@ -1,0 +1,15 @@
+[project]
+name = "comfyui_jc2"
+description = "Wrapped Joy Caption alpha 2 node for comfyui from [a/https://huggingface.co/spaces/fancyfeast/joy-caption-alpha-two](https://huggingface.co/spaces/fancyfeast/joy-caption-alpha-two) Easy use, for GPU with less 19G, please use nf4 for better balanced speed and result. This Node also took a reference from /chflame163/ComfyUI_LayerStyle and [a/https://huggingface.co/John6666/joy-caption-alpha-two-cli-mod](https://huggingface.co/John6666/joy-caption-alpha-two-cli-mod)"
+version = "1.0.0"
+license = {file = "LICENSE"}
+dependencies = ["huggingface_hub>=0.23.4,<=0.25", "accelerate", "transformers>=4.43.2,<=4.45.1", "sentencepiece", "peft==0.12.0", "bitsandbytes"]
+
+[project.urls]
+Repository = "https://github.com/TTPlanetPig/Comfyui_JC2"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "Comfyui_JC2"
+Icon = ""
