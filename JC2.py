@@ -1,4 +1,4 @@
-# Based on https://huggingface.co/John6666/joy-caption-alpha-two-cli-mod and https://github.com/chflame163/ComfyUI_LayerStyle
+# Based on https://huggingface.co/John6666/joy-caption-alpha-two-cli-modand https://github.com/chflame163/ComfyUI_LayerStyle
 
 import os
 import sys
@@ -12,6 +12,9 @@ import numpy as np
 import folder_paths
 import json
 import logging
+from transformers import AutoProcessor, AutoModelForCausalLM
+from huggingface_hub import snapshot_download
+import shutil
 
 # Define the Joy2_Model class
 class Joy2_Model:
@@ -85,9 +88,26 @@ def load_models(model_path, dtype, device="cuda"):
 
     JC_lora = "text_model"
     use_lora = True if JC_lora != "none" else False
-    CLIP_PATH = os.path.join(folder_paths.models_dir, "clip_vision", "siglip-so400m-patch14-384")
+    CLIP_PATH = os.path.join(folder_paths.models_dir, "clip_vision", "google--siglip-so400m-patch14-384")
     CHECKPOINT_PATH = os.path.join(folder_paths.models_dir, "Joy_caption", "cgrkzexw-599808")
     LORA_PATH = os.path.join(CHECKPOINT_PATH, "text_model")
+
+    if os.path.exists(CLIP_PATH):
+        print("Start to load existing VLM")
+    else:
+        print("VLM not found locally. Downloading google/siglipso400m-patch14-384...")
+        try:
+            snapshot_download(
+                repo_id="google/siglip-so400m-patch14-384", 
+                local_dir=os.path.join(folder_paths.models_dir, "clip_vision", "cache--google--siglip-so400m-patch14-384"),
+                local_dir_use_symlinks=False,
+                resume_download=True
+            )
+            shutil.move(os.path.join(folder_paths.models_dir, "clip_vision", "cache--google--siglip-so400m-patch14-384"), CLIP_PATH)
+            print(f"VLM has been downloaded to {CLIP_PATH}")
+        except Exception as e:
+            print(f"Error downloading CLIP model: {e}")
+            raise
 
     try:
         if dtype == "nf4":
@@ -396,7 +416,7 @@ class JoyCaption2:
 
     @classmethod
     def INPUT_TYPES(cls):
-        llm_model_list = ["unsloth/Meta-Llama-3.1-8B-Instruct"]
+        llm_model_list = ["unsloth/Meta-Llama-3.1-8B-Instruct", "Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2"]
         dtype_list = ['nf4', 'bf16']
         caption_type_list = [
             "Descriptive", "Descriptive (Informal)", "Training Prompt", "MidJourney",
@@ -405,11 +425,11 @@ class JoyCaption2:
         ]
         caption_length_list = ["any", "very short", "short", "medium-length", "long", "very long"] + [str(i) for i in range(20, 261, 5)]
         
-        # 获取 extra_option.json 的路径
+        # get extra_option.json path
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        extra_option_file = os.path.join(base_dir, "extra_option.json")  # 调整为 JSON 文件的正确路径
+        extra_option_file = os.path.join(base_dir, "extra_option.json") 
 
-        # 加载 extra_options_list
+        # load extra_options_list
         extra_options_list = {}
         if os.path.isfile(extra_option_file):
             try:
@@ -418,7 +438,6 @@ class JoyCaption2:
                     for item in json_content:
                         option_name = item.get("name")
                         if option_name:
-                            # 为每个选项创建一个布尔输入（复选框）
                             extra_options_list[option_name] = ("BOOLEAN", {"default": False})
                             # logger.info(f"Loaded extra option: {option_name}")
             except Exception as e:
@@ -440,32 +459,46 @@ class JoyCaption2:
                 "temperature": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
                 "cache_model": ("BOOLEAN", {"default": False}),
                 "enable_extra_options": ("BOOLEAN", {"default": True, "label": "启用额外选项"}),  # 新增开关
-                **extra_options_list,  # 添加动态加载的额外选项
-                "character_name": ("STRING", {"default": "", "multiline": False}),  # 始终显示 'character_name' 输入框
+                **extra_options_list,  
+                "character_name": ("STRING", {"default": "", "multiline": False}),  
             },
         }
+ 
 
     def joycaption2(
         self, image, llm_model, dtype, caption_type, caption_length,
         user_prompt, max_new_tokens, top_p, temperature, cache_model,
         enable_extra_options, character_name, **extra_options  
     ):
-        ret_text = []
-        model_path = llm_model
+        ret_text = [] 
+        comfy_model_dir = os.path.join(folder_paths.models_dir, "LLM")
+        print(f"comfy_model_dir:{comfy_model_dir}")
+        if not os.path.exists(comfy_model_dir):
+            os.mkdir(comfy_model_dir)
+        
+        sanitized_model_name = llm_model.replace('/', '--')
+        llm_model_path = os.path.join(comfy_model_dir, sanitized_model_name)  
+        llm_model_path_cache = os.path.join(comfy_model_dir, "cache--" + sanitized_model_name)
+
+        if os.path.exists(llm_model_path):
+            print(f"Start to load existing model")
+        else:
+            print(f"Model not found locally. Downloading {llm_model}...")
+            snapshot_download(repo_id=llm_model, local_dir=llm_model_path_cache, local_dir_use_symlinks=False, resume_download=True)
+            shutil.move(llm_model_path_cache, llm_model_path)   
+            print(f"Model downloaded to {llm_model_path}...")
         device = 'cuda'
         JC_lora = 'text_model' 
 
         if self.previous_model is None:
-            model = load_models(model_path, dtype, device=device)
+            model = load_models(llm_model_path, dtype, device=device)
         else:
             model = self.previous_model
 
-        # 获取当前脚本文件所在目录
         base_dir = os.path.dirname(os.path.abspath(__file__))
         extra_option_file = os.path.join(base_dir, "extra_option.json")  # 调整为 JSON 文件的正确路径
         extra_prompts = {}
 
-        # 从 JSON 文件加载额外提示词
         if enable_extra_options and os.path.isfile(extra_option_file):
             try:
                 with open(extra_option_file, "r", encoding='utf-8') as f:
