@@ -1,5 +1,4 @@
-# Based on https://huggingface.co/John6666/joy-caption-alpha-two-cli-mod
-and https://github.com/chflame163/ComfyUI_LayerStyle
+# Based on https://huggingface.co/John6666/joy-caption-alpha-two-cli-mod and https://github.com/chflame163/ComfyUI_LayerStyle
 
 import os
 import sys
