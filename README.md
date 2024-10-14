@@ -41,6 +41,12 @@ Make sure your model is well placed as below.
 
 ![image](https://github.com/user-attachments/assets/9ae0a410-539e-49c5-a1b4-4434da02dc28)
 
+![image](https://github.com/user-attachments/assets/2d17e8d2-42af-4040-9cf9-019eb25464e0)
+
+![image](https://github.com/user-attachments/assets/aeba0145-81c7-4c86-a31c-bbb9c317cad8)
+
+
+
 # Key options:
 1. For 3090/4090 use bf16 otherwise nf4. please notice nf4 accuracy is lower than bf16, you can directly figure out.
    ![image](https://github.com/user-attachments/assets/8001e70b-cea3-4971-a8c2-f483a2c4f91c) 
