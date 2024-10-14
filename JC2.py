@@ -613,7 +613,7 @@ class ExtraOptionsNode:
                 logger.info(f"extra_option.json not found at {extra_option_file} during processing.")
 
         # 将所有启用的提示拼接成一个字符串
-        return (" ".join(extra_prompts),)   # 返回一个单一的合并字符串
+        return (" ".join(extra_prompts),)  # 返回一个单一的合并字符串
 
 class JoyCaption2_simple:
     
@@ -658,18 +658,18 @@ class JoyCaption2_simple:
                 "cache_model": ("BOOLEAN", {"default": False}),
             },
             "optional": {
-                "extra_options_node": ("STRING", {"forceInput": True}),  # 接收来自 ExtraOptionsNode 的单一字符串
+                "extra_options_node": ("STRING",),  # 接收来自 ExtraOptionsNode 的单一字符串
             },    
         }
 
     def joycaption2_simple(
         self, image, llm_model, dtype, caption_type, caption_length,
         user_prompt, max_new_tokens, top_p, temperature, cache_model,
-        extra_options_node
+        extra_options_node=None  # 设置默认值为 None
     ):
         ret_text = [] 
         comfy_model_dir = os.path.join(folder_paths.models_dir, "LLM")
-        print(f"comfy_model_dir:{comfy_model_dir}")
+        print(f"comfy_model_dir: {comfy_model_dir}")
         if not os.path.exists(comfy_model_dir):
             os.mkdir(comfy_model_dir)
         
@@ -700,24 +700,25 @@ class JoyCaption2_simple:
 
         # 接收来自 ExtraOptionsNode 的额外提示
         extra = []
-        if extra_options_node:
+        if extra_options_node and extra_options_node.strip():
             extra = [extra_options_node]  # 将单一字符串包装成列表
+        # 如果 extra_options_node 为 None 或空字符串，则 extra 为空列表
 
-            processed_images = [
-                Image.fromarray(
-                    np.clip(255.0 * img.unsqueeze(0).cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
-                ).convert('RGB')
-                for img in image
-            ]
+        processed_images = [
+            Image.fromarray(
+                np.clip(255.0 * img.unsqueeze(0).cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
+            ).convert('RGB')
+            for img in image
+        ]
 
-            captions = stream_chat(
-                processed_images, caption_type, caption_length,
-                extra, "", user_prompt,
-                max_new_tokens, top_p, temperature, len(processed_images),
-                model, device
-            )
+        captions = stream_chat(
+            processed_images, caption_type, caption_length,
+            extra, "", user_prompt,
+            max_new_tokens, top_p, temperature, len(processed_images),
+            model, device
+        )
 
-            ret_text.extend(captions)
+        ret_text.extend(captions)
 
         if cache_model:
             self.previous_model = model
