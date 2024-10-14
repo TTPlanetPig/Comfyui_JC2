@@ -15,6 +15,7 @@ import logging
 from transformers import AutoProcessor, AutoModelForCausalLM
 from huggingface_hub import snapshot_download
 import shutil
+import gc
 
 # Define the Joy2_Model class
 class Joy2_Model:
@@ -81,9 +82,8 @@ class ImageAdapter(nn.Module):
         return self.other_tokens(torch.tensor([2], device=self.other_tokens.weight.device)).squeeze(0)
 
 # Define the model loading function
-def load_models(model_path, dtype, device="cuda"):
-    from transformers import AutoModel, AutoProcessor, AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast, \
-        AutoModelForCausalLM
+def load_models(model_path, dtype, device="cuda", max_memory=None):
+    from transformers import AutoModel, AutoProcessor, AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast, AutoModelForCausalLM
     from peft import PeftModel
 
     JC_lora = "text_model"
@@ -112,8 +112,12 @@ def load_models(model_path, dtype, device="cuda"):
     try:
         if dtype == "nf4":
             from transformers import BitsAndBytesConfig
-            nf4_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                                            bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.bfloat16)
+            nf4_config = BitsAndBytesConfig(
+                load_in_4bit=True, 
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True, 
+                bnb_4bit_compute_dtype=torch.bfloat16
+            )
             print("Loading in NF4")
             print("Loading CLIP")
             clip_processor = AutoProcessor.from_pretrained(CLIP_PATH)
@@ -128,27 +132,41 @@ def load_models(model_path, dtype, device="cuda"):
 
             print("Loading tokenizer")
             tokenizer = AutoTokenizer.from_pretrained(os.path.join(CHECKPOINT_PATH, "text_model"), use_fast=True)
-            assert isinstance(tokenizer,
-                              (PreTrainedTokenizer, PreTrainedTokenizerFast)), f"Tokenizer is of type {type(tokenizer)}"
+            assert isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast)), f"Tokenizer is of type {type(tokenizer)}"
 
             print(f"Loading LLM: {model_path}")
-            text_model = AutoModelForCausalLM.from_pretrained(model_path, quantization_config=nf4_config,
-                                                              device_map=device, torch_dtype=torch.bfloat16).eval()
+            text_model = AutoModelForCausalLM.from_pretrained(
+                model_path, 
+                quantization_config=nf4_config,
+                device_map=device if device == "cuda" else {"": device}, 
+                torch_dtype=torch.bfloat16,
+                max_memory=max_memory  # 添加 max_memory 参数
+            ).eval()
 
             if False and use_lora and os.path.exists(LORA_PATH):  # omitted
                 print("Loading VLM's custom text model")
-                text_model = PeftModel.from_pretrained(model=text_model, model_id=LORA_PATH, device_map=device,
-                                                       quantization_config=nf4_config)
+                text_model = PeftModel.from_pretrained(
+                    model=text_model, 
+                    model_id=LORA_PATH, 
+                    device_map=device if device == "cuda" else {"": device},
+                    quantization_config=nf4_config
+                )
                 text_model = text_model.merge_and_unload(
-                    safe_merge=True)  # to avoid PEFT bug https://github.com/huggingface/transformers/issues/28515
+                    safe_merge=True
+                )  # to avoid PEFT bug https://github.com/huggingface/transformers/issues/28515
             else:
                 print("VLM's custom text model isn't loaded")
 
             print("Loading image adapter")
-            image_adapter = ImageAdapter(clip_model.config.hidden_size, text_model.config.hidden_size, False, False, 38,
-                                         False).eval().to("cpu")
+            image_adapter = ImageAdapter(
+                clip_model.config.hidden_size, 
+                text_model.config.hidden_size, 
+                False, False, 38,
+                False
+            ).eval().to("cpu")
             image_adapter.load_state_dict(
-                torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=device, weights_only=False))
+                torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=device, weights_only=False)
+            )
             image_adapter.eval().to(device)
         else:  # bf16
             print("Loading in bfloat16")
@@ -165,26 +183,39 @@ def load_models(model_path, dtype, device="cuda"):
 
             print("Loading tokenizer")
             tokenizer = AutoTokenizer.from_pretrained(os.path.join(CHECKPOINT_PATH, "text_model"), use_fast=True)
-            assert isinstance(tokenizer,
-                              (PreTrainedTokenizer, PreTrainedTokenizerFast)), f"Tokenizer is of type {type(tokenizer)}"
+            assert isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast)), f"Tokenizer is of type {type(tokenizer)}"
 
             print(f"Loading LLM: {model_path}")
-            text_model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto",
-                                                              torch_dtype=torch.bfloat16).eval()
+            text_model = AutoModelForCausalLM.from_pretrained(
+                model_path, 
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+                max_memory=max_memory  # 添加 max_memory 参数
+            ).eval()
 
             if use_lora and os.path.exists(LORA_PATH):
                 print("Loading VLM's custom text model")
-                text_model = PeftModel.from_pretrained(model=text_model, model_id=LORA_PATH, device_map=device)
+                text_model = PeftModel.from_pretrained(
+                    model=text_model, 
+                    model_id=LORA_PATH, 
+                    device_map=device if device == "cuda" else {"": device}
+                )
                 text_model = text_model.merge_and_unload(
-                    safe_merge=True)  # to avoid PEFT bug https://github.com/huggingface/transformers/issues/28515
+                    safe_merge=True
+                )  # to avoid PEFT bug https://github.com/huggingface/transformers/issues/28515
             else:
                 print("VLM's custom text model isn't loaded")
 
             print("Loading image adapter")
-            image_adapter = ImageAdapter(clip_model.config.hidden_size, text_model.config.hidden_size, False, False, 38,
-                                         False).eval().to(device)
+            image_adapter = ImageAdapter(
+                clip_model.config.hidden_size, 
+                text_model.config.hidden_size, 
+                False, False, 38,
+                False
+            ).eval().to(device)
             image_adapter.load_state_dict(
-                torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=device, weights_only=False))
+                torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=device, weights_only=False)
+            )
     except Exception as e:
         print(f"Error loading models: {e}")
     finally:
@@ -441,9 +472,9 @@ class JoyCaption2:
                             extra_options_list[option_name] = ("BOOLEAN", {"default": False})
                             # logger.info(f"Loaded extra option: {option_name}")
             except Exception as e:
-                logger.error(f"Error loading extra_option.json: {e}")
+                print(f"Error loading extra_option.json: {e}")
         else:
-            logger.info(f"extra_option.json not found at {extra_option_file}. No extra options will be available.")
+            print(f"extra_option.json not found at {extra_option_file}. No extra options will be available.")
 
         # 定义额外的输入字段
         return {
@@ -480,20 +511,68 @@ class JoyCaption2:
         llm_model_path = os.path.join(comfy_model_dir, sanitized_model_name)  
         llm_model_path_cache = os.path.join(comfy_model_dir, "cache--" + sanitized_model_name)
 
-        if os.path.exists(llm_model_path):
-            print(f"Start to load existing model")
-        else:
-            print(f"Model not found locally. Downloading {llm_model}...")
-            snapshot_download(repo_id=llm_model, local_dir=llm_model_path_cache, local_dir_use_symlinks=False, resume_download=True)
-            shutil.move(llm_model_path_cache, llm_model_path)   
-            print(f"Model downloaded to {llm_model_path}...")
-        device = 'cuda'
-        JC_lora = 'text_model' 
+        # 初始设备设置为 'cuda'
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model_loaded_on = device  # 跟踪模型加载在哪个设备上
 
-        if self.previous_model is None:
-            model = load_models(llm_model_path, dtype, device=device)
-        else:
-            model = self.previous_model
+        try:
+            if os.path.exists(llm_model_path):
+                print(f"Start to load existing model on {device}")
+            else:
+                print(f"Model not found locally. Downloading {llm_model}...")
+                snapshot_download(
+                    repo_id=llm_model, 
+                    local_dir=llm_model_path_cache, 
+                    local_dir_use_symlinks=False, 
+                    resume_download=True
+                )
+                shutil.move(llm_model_path_cache, llm_model_path)   
+                print(f"Model downloaded to {llm_model_path}...")
+            
+            if self.previous_model is None:
+                try:
+                    # 计算设备 0 的 90% 显存
+                    if torch.cuda.is_available():
+                        total_mem = torch.cuda.get_device_properties(0).total_memory  # 总显存（字节）
+                        # 转换为 GiB
+                        total_mem_gib = total_mem / (1024 ** 3)
+                        max_mem_gib = int(total_mem_gib * 0.9)
+                        max_mem_str = f"{max_mem_gib}GiB"
+                        max_memory = {0: max_mem_str}
+                    else:
+                        max_memory = None  # 如果使用 CPU，则不设置 max_memory
+
+                    # 尝试加载模型，设置 max_memory
+                    model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=max_memory)
+                except RuntimeError as e:
+                    if 'out of memory' in str(e).lower():
+                        if torch.cuda.is_available():
+                            print("CUDA 内存不足，尝试清理缓存并重新加载模型...")
+                            #torch.cuda.empty_cache()
+                            #gc.collect()
+                            try:
+                                model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=max_memory)
+                            except RuntimeError as e2:
+                                if 'out of memory' in str(e2).lower():
+                                    # 显存仍不足，加载模型到 CPU
+                                    device = 'cpu'
+                                    model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=None)
+                                    model_loaded_on = device
+                                    print("We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` into a higher value to use more memory (at your own risk).")
+                                else:
+                                    raise e2
+                        else:
+                            raise e
+                    else:
+                        raise e
+            else:
+                model = self.previous_model
+
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            return ("Error loading model.",)
+
+        print(f"Model loaded on {model_loaded_on}")
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         extra_option_file = os.path.join(base_dir, "extra_option.json")  # 调整为 JSON 文件的正确路径
@@ -509,9 +588,9 @@ class JoyCaption2:
                         if name and prompt:
                             extra_prompts[name] = prompt
             except Exception as e:
-                logger.error(f"Error reading extra_option.json: {e}")
+                print(f"Error reading extra_option.json: {e}")
         elif not os.path.isfile(extra_option_file):
-            logger.info(f"extra_option.json not found at {extra_option_file} during processing.")
+            print(f"extra_option.json not found at {extra_option_file} during processing.")
 
         extra = []
         if enable_extra_options:
@@ -572,9 +651,9 @@ class ExtraOptionsNode:
                             # 定义每个额外选项为布尔输入
                             extra_options_list[option_name] = ("BOOLEAN", {"default": False})
             except Exception as e:
-                logger.error(f"Error loading extra_option.json: {e}")
+                print(f"Error loading extra_option.json: {e}")
         else:
-            logger.info(f"extra_option.json not found at {extra_option_file}. No extra options will be available.")
+            print(f"extra_option.json not found at {extra_option_file}. No extra options will be available.")
 
         # 定义输入字段，包括开关和 character_name
         return {
@@ -608,9 +687,9 @@ class ExtraOptionsNode:
                                         prompt = prompt.replace("{name}", character_name)
                                     extra_prompts.append(prompt)
                 except Exception as e:
-                    logger.error(f"Error reading extra_option.json: {e}")
+                    print(f"Error reading extra_option.json: {e}")
             else:
-                logger.info(f"extra_option.json not found at {extra_option_file} during processing.")
+                print(f"extra_option.json not found at {extra_option_file} during processing.")
 
         # 将所有启用的提示拼接成一个字符串
         return (" ".join(extra_prompts),)  # 返回一个单一的合并字符串
@@ -677,33 +756,78 @@ class JoyCaption2_simple:
         llm_model_path = os.path.join(comfy_model_dir, sanitized_model_name)  
         llm_model_path_cache = os.path.join(comfy_model_dir, "cache--" + sanitized_model_name)
 
-        if os.path.exists(llm_model_path):
-            print(f"Start to load existing model")
-        else:
-            print(f"Model not found locally. Downloading {llm_model}...")
-            snapshot_download(
-                repo_id=llm_model, 
-                local_dir=llm_model_path_cache, 
-                local_dir_use_symlinks=False, 
-                resume_download=True
-            )
-            shutil.move(llm_model_path_cache, llm_model_path)   
-            print(f"Model downloaded to {llm_model_path}...")
-        
-        device = 'cuda'
-        JC_lora = 'text_model' 
+        # 初始设备设置为 'cuda'
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model_loaded_on = device  # 跟踪模型加载在哪个设备上
 
-        if self.previous_model is None:
-            model = load_models(llm_model_path, dtype, device=device)
-        else:
-            model = self.previous_model
+        try:
+            if os.path.exists(llm_model_path):
+                print(f"Start to load existing model on {device}")
+            else:
+                print(f"Model not found locally. Downloading {llm_model}...")
+                snapshot_download(
+                    repo_id=llm_model, 
+                    local_dir=llm_model_path_cache, 
+                    local_dir_use_symlinks=False, 
+                    resume_download=True
+                )
+                shutil.move(llm_model_path_cache, llm_model_path)   
+                print(f"Model downloaded to {llm_model_path}...")
+            
+            if self.previous_model is None:
+                try:
+                    # 计算设备 0 的 90% 显存
+                    if torch.cuda.is_available():
+                        total_mem = torch.cuda.get_device_properties(0).total_memory  # 总显存（字节）
+                        # 转换为 GiB
+                        total_mem_gib = total_mem / (1024 ** 3)
+                        max_mem_gib = int(total_mem_gib * 0.9)
+                        max_mem_str = f"{max_mem_gib}GiB"
+                        max_memory = {0: max_mem_str}
+                    else:
+                        max_memory = None  # 如果使用 CPU，则不设置 max_memory
+
+                    # 尝试加载模型，设置 max_memory
+                    model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=max_memory)
+                except RuntimeError as e:
+                    if 'out of memory' in str(e).lower():
+                        if torch.cuda.is_available():
+                            print("CUDA 内存不足，尝试清理缓存并重新加载模型...")
+                            #torch.cuda.empty_cache()
+                            #gc.collect()
+                            try:
+                                model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=max_memory)
+                            except RuntimeError as e2:
+                                if 'out of memory' in str(e2).lower():
+                                    # 显存仍不足，加载模型到 CPU
+                                    device = 'cpu'
+                                    model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=None)
+                                    model_loaded_on = device
+                                    print("We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` into a higher value to use more memory (at your own risk).")
+                                else:
+                                    raise e2
+                        else:
+                            raise e
+                    else:
+                        raise e
+            else:
+                model = self.previous_model
+
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            return ("Error loading model.",)
+
+        print(f"Model loaded on {model_loaded_on}")
 
         # 接收来自 ExtraOptionsNode 的额外提示
         extra = []
         if extra_options_node and extra_options_node.strip():
             extra = [extra_options_node]  # 将单一字符串包装成列表
-        # 如果 extra_options_node 为 None 或空字符串，则 extra 为空列表
+            print(f"Extra options enabled: {extra_options_node}")
+        else:
+            print("No extra options provided.")
 
+        # 处理图像
         processed_images = [
             Image.fromarray(
                 np.clip(255.0 * img.unsqueeze(0).cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
@@ -711,14 +835,17 @@ class JoyCaption2_simple:
             for img in image
         ]
 
-        captions = stream_chat(
-            processed_images, caption_type, caption_length,
-            extra, "", user_prompt,
-            max_new_tokens, top_p, temperature, len(processed_images),
-            model, device
-        )
-
-        ret_text.extend(captions)
+        try:
+            captions = stream_chat(
+                processed_images, caption_type, caption_length,
+                extra, "", user_prompt,
+                max_new_tokens, top_p, temperature, len(processed_images),
+                model, device  # 确保传递正确的设备
+            )
+            ret_text.extend(captions)
+        except Exception as e:
+            print(f"Error during stream_chat: {e}")
+            return ("Error generating captions.",)
 
         if cache_model:
             self.previous_model = model
