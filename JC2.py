@@ -519,18 +519,21 @@ class JoyCaption2:
                 if is_enabled and option_name in extra_prompts:
                     extra.append(extra_prompts[option_name])
 
-        for img in image:
-            img = Image.fromarray(
-                np.clip(255.0 * img.unsqueeze(0).cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
-            ).convert('RGB')
-            
-            caption = stream_chat(
-                [img], caption_type, caption_length,
-                extra, character_name, user_prompt,
-                max_new_tokens, top_p, temperature, 1,
+            processed_images = [
+                Image.fromarray(
+                    np.clip(255.0 * img.unsqueeze(0).cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
+                ).convert('RGB')
+                for img in image
+            ]
+
+            captions = stream_chat(
+                processed_images, caption_type, caption_length,
+                extra, "", user_prompt,
+                max_new_tokens, top_p, temperature, len(processed_images),
                 model, device
             )
-            ret_text.append(caption[0])
+
+            ret_text.extend(captions)
 
         if cache_model:
             self.previous_model = model
@@ -540,12 +543,200 @@ class JoyCaption2:
             free_memory()
 
         return (ret_text,)
-            
+
+
+class ExtraOptionsNode:
+    CATEGORY = 'TTP_Toolset'
+    FUNCTION = "extra_options"
+    RETURN_TYPES = ("STRING",)  # 改为返回单一字符串
+    RETURN_NAMES = ("extra_options_str",)
+    OUTPUT_IS_LIST = (False,)  # 单一字符串输出
+
+    def __init__(self):
+        self.NODE_NAME = 'ExtraOptionsNode'
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        # 获取 extra_option.json 的路径并加载选项
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        extra_option_file = os.path.join(base_dir, "extra_option.json")
+        extra_options_list = {}
+
+        if os.path.isfile(extra_option_file):
+            try:
+                with open(extra_option_file, "r", encoding='utf-8') as f:
+                    json_content = json.load(f)
+                    for item in json_content:
+                        option_name = item.get("name")
+                        if option_name:
+                            # 定义每个额外选项为布尔输入
+                            extra_options_list[option_name] = ("BOOLEAN", {"default": False})
+            except Exception as e:
+                logger.error(f"Error loading extra_option.json: {e}")
+        else:
+            logger.info(f"extra_option.json not found at {extra_option_file}. No extra options will be available.")
+
+        # 定义输入字段，包括开关和 character_name
+        return {
+            "required": {
+                "enable_extra_options": ("BOOLEAN", {"default": True, "label": "启用额外选项"}),  # 开关
+                **extra_options_list,  # 动态加载的额外选项
+                "character_name": ("STRING", {"default": "", "multiline": False}),  # 移动 character_name
+            },
+        }
+
+    def extra_options(self, enable_extra_options, character_name, **extra_options):
+        """
+        处理额外选项并返回已启用的提示列表。
+        如果启用了替换角色名称选项，并提供了 character_name，则进行替换。
+        """
+        extra_prompts = []
+        if enable_extra_options:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            extra_option_file = os.path.join(base_dir, "extra_option.json")
+            if os.path.isfile(extra_option_file):
+                try:
+                    with open(extra_option_file, "r", encoding='utf-8') as f:
+                        json_content = json.load(f)
+                        for item in json_content:
+                            name = item.get("name")
+                            prompt = item.get("prompt")
+                            if name and prompt:
+                                if extra_options.get(name):
+                                    # 如果 prompt 中包含 {name}，则替换为 character_name
+                                    if "{name}" in prompt:
+                                        prompt = prompt.replace("{name}", character_name)
+                                    extra_prompts.append(prompt)
+                except Exception as e:
+                    logger.error(f"Error reading extra_option.json: {e}")
+            else:
+                logger.info(f"extra_option.json not found at {extra_option_file} during processing.")
+
+        # 将所有启用的提示拼接成一个字符串
+        return (" ".join(extra_prompts),)   # 返回一个单一的合并字符串
+
+class JoyCaption2_simple:
+    
+    CATEGORY = 'TTP_Toolset'
+    FUNCTION = "joycaption2_simple"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("text",)
+    OUTPUT_IS_LIST = (True,)
+    
+    def __init__(self):
+        self.NODE_NAME = 'JoyCaption2_simple'
+        self.previous_model = None
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        llm_model_list = [
+            "unsloth/Meta-Llama-3.1-8B-Instruct",
+            "Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2"
+        ]
+        dtype_list = ['nf4', 'bf16']
+        caption_type_list = [
+            "Descriptive", "Descriptive (Informal)", "Training Prompt", "MidJourney",
+            "Booru tag list", "Booru-like tag list", "Art Critic", "Product Listing",
+            "Social Media Post"
+        ]
+        caption_length_list = [
+            "any", "very short", "short", "medium-length", "long", "very long"
+        ] + [str(i) for i in range(20, 261, 5)]
+
+        # 定义额外的输入字段
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "llm_model": (llm_model_list,),
+                "dtype": (dtype_list,),
+                "caption_type": (caption_type_list,),
+                "caption_length": (caption_length_list,),
+                "user_prompt": ("STRING", {"default": "", "multiline": True}),
+                "max_new_tokens": ("INT", {"default": 260, "min": 8, "max": 4096, "step": 1}),
+                "top_p": ("FLOAT", {"default": 0.8, "min": 0, "max": 1, "step": 0.01}),
+                "temperature": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
+                "cache_model": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "extra_options_node": ("STRING", {"forceInput": True}),  # 接收来自 ExtraOptionsNode 的单一字符串
+            },    
+        }
+
+    def joycaption2_simple(
+        self, image, llm_model, dtype, caption_type, caption_length,
+        user_prompt, max_new_tokens, top_p, temperature, cache_model,
+        extra_options_node
+    ):
+        ret_text = [] 
+        comfy_model_dir = os.path.join(folder_paths.models_dir, "LLM")
+        print(f"comfy_model_dir:{comfy_model_dir}")
+        if not os.path.exists(comfy_model_dir):
+            os.mkdir(comfy_model_dir)
+        
+        sanitized_model_name = llm_model.replace('/', '--')
+        llm_model_path = os.path.join(comfy_model_dir, sanitized_model_name)  
+        llm_model_path_cache = os.path.join(comfy_model_dir, "cache--" + sanitized_model_name)
+
+        if os.path.exists(llm_model_path):
+            print(f"Start to load existing model")
+        else:
+            print(f"Model not found locally. Downloading {llm_model}...")
+            snapshot_download(
+                repo_id=llm_model, 
+                local_dir=llm_model_path_cache, 
+                local_dir_use_symlinks=False, 
+                resume_download=True
+            )
+            shutil.move(llm_model_path_cache, llm_model_path)   
+            print(f"Model downloaded to {llm_model_path}...")
+        
+        device = 'cuda'
+        JC_lora = 'text_model' 
+
+        if self.previous_model is None:
+            model = load_models(llm_model_path, dtype, device=device)
+        else:
+            model = self.previous_model
+
+        # 接收来自 ExtraOptionsNode 的额外提示
+        extra = []
+        if extra_options_node:
+            extra = [extra_options_node]  # 将单一字符串包装成列表
+
+            processed_images = [
+                Image.fromarray(
+                    np.clip(255.0 * img.unsqueeze(0).cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
+                ).convert('RGB')
+                for img in image
+            ]
+
+            captions = stream_chat(
+                processed_images, caption_type, caption_length,
+                extra, "", user_prompt,
+                max_new_tokens, top_p, temperature, len(processed_images),
+                model, device
+            )
+
+            ret_text.extend(captions)
+
+        if cache_model:
+            self.previous_model = model
+        else:
+            self.previous_model = None
+            del model
+            free_memory()
+
+        return (ret_text,)
+        
 # Register the node
 NODE_CLASS_MAPPINGS = {
     "JoyCaption2": JoyCaption2,
+    "ExtraOptionsNode": ExtraOptionsNode,
+    "JoyCaption2_simple": JoyCaption2_simple,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "JoyCaption2": "TTP_JoyCaption2",
+    "JoyCaption2": "TTP_JoyCaption2_Full",
+    "ExtraOptionsNode": "TTP_ExtraOptionsNode",
+    "JoyCaption2_simple": "TTP_JoyCaption2_simple",
 }
