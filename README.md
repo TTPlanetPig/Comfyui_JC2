@@ -3,6 +3,13 @@
 Wrapped Joy Caption alpha 2 node for comfyui from https://huggingface.co/spaces/fancyfeast/joy-caption-alpha-two
 Easy use, for GPU with less 19G, please use nf4 for better balanced speed and result.
 This Node also took a reference from /chflame163/ComfyUI_LayerStyle and https://huggingface.co/John6666/joy-caption-alpha-two-cli-mod
+# Please notice🔥:
+🔥BF16 need at least 19GB free VRAM to run
+
+🔥NF4 need at least 10GB free VRAM to run
+
+🔥Insufficient VRAM will lead to error in Comfyui
+
 
 # Usage:
 -inside comfyui
@@ -36,8 +43,7 @@ pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https
 
 Make sure your model is well placed as below.
 
-![image](https://github.com/user-attachments/assets/510d2e6b-db1f-4743-92f4-9a8ae80ef6dd)
-
+![image](https://github.com/user-attachments/assets/4675b67c-38f8-4d6a-9785-607215038337)
 
 ![image](https://github.com/user-attachments/assets/9ae0a410-539e-49c5-a1b4-4434da02dc28)
 
