@@ -25,7 +25,7 @@ pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https
 ```
 # Model preparation:
 
--clip vision: https://huggingface.co/google/siglip-so400m-patch14-384/tree/main download all files and place in ComfyUI\models\clip_vision\siglip-so400m-patch14-384
+-clip vision: https://huggingface.co/google/siglip-so400m-patch14-384/tree/main download all files and place in ComfyUI\models\clip_vision\google--siglip-so400m-patch14-384
 
 -LLM: https://huggingface.co/unsloth/Meta-Llama-3.1-8B-Instruct download all files and place in ComfyUI\models\LLM\unsloth--Meta-Llama-3.1-8B-Instruct
 
