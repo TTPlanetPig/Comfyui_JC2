@@ -82,7 +82,7 @@ class ImageAdapter(nn.Module):
         return self.other_tokens(torch.tensor([2], device=self.other_tokens.weight.device)).squeeze(0)
 
 # Define the model loading function
-def load_models(model_path, dtype, device="cuda", max_memory=None):
+def load_models(model_path, dtype, device="cuda", max_memory=None, device_map=None):
     from transformers import AutoModel, AutoProcessor, AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast, AutoModelForCausalLM
     from peft import PeftModel
 
@@ -138,12 +138,12 @@ def load_models(model_path, dtype, device="cuda", max_memory=None):
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
                 quantization_config=nf4_config,
-                device_map=device if device == "cuda" else {"": device}, 
+                device_map=device_map,  # 修改
                 torch_dtype=torch.bfloat16,
-                max_memory=max_memory  # 添加 max_memory 参数
+                max_memory=max_memory
             ).eval()
 
-            if False and use_lora and os.path.exists(LORA_PATH):  # omitted
+            if use_lora and os.path.exists(LORA_PATH):  # omitted
                 print("Loading VLM's custom text model")
                 text_model = PeftModel.from_pretrained(
                     model=text_model, 
@@ -188,9 +188,9 @@ def load_models(model_path, dtype, device="cuda", max_memory=None):
             print(f"Loading LLM: {model_path}")
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
-                device_map="auto",
+                device_map=device_map,  # 修改
                 torch_dtype=torch.bfloat16,
-                max_memory=max_memory  # 添加 max_memory 参数
+                max_memory=max_memory
             ).eval()
 
             if use_lora and os.path.exists(LORA_PATH):
@@ -489,6 +489,7 @@ class JoyCaption2:
                 "top_p": ("FLOAT", {"default": 0.8, "min": 0, "max": 1, "step": 0.01}),
                 "temperature": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
                 "cache_model": ("BOOLEAN", {"default": False}),
+                "allow_share_vram": ("BOOLEAN", {"default": False}),
                 "enable_extra_options": ("BOOLEAN", {"default": True, "label": "启用额外选项"}),  # 新增开关
                 **extra_options_list,  
                 "character_name": ("STRING", {"default": "", "multiline": False}),  
@@ -498,7 +499,7 @@ class JoyCaption2:
 
     def joycaption2(
         self, image, llm_model, dtype, caption_type, caption_length,
-        user_prompt, max_new_tokens, top_p, temperature, cache_model,
+        user_prompt, max_new_tokens, top_p, temperature, cache_model, allow_share_vram, 
         enable_extra_options, character_name, **extra_options  
     ):
         ret_text = [] 
@@ -531,37 +532,39 @@ class JoyCaption2:
             
             if self.previous_model is None:
                 try:
-                    # 计算设备 0 的 90% 显存
                     if torch.cuda.is_available():
-                        total_mem = torch.cuda.get_device_properties(0).total_memory  # 总显存（字节）
-                        # 转换为 GiB
+                        total_mem = torch.cuda.get_device_properties(0).total_memory
                         total_mem_gib = total_mem / (1024 ** 3)
                         max_mem_gib = int(total_mem_gib * 0.9)
                         max_mem_str = f"{max_mem_gib}GiB"
                         max_memory = {0: max_mem_str}
                     else:
-                        max_memory = None  # 如果使用 CPU，则不设置 max_memory
+                        max_memory = None
 
-                    # 尝试加载模型，设置 max_memory
-                    model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=max_memory)
+                    # 根据 allow_share_vram 设置 device_map 和 max_memory
+                    if allow_share_vram:
+                        device_map = "auto"
+                        print("允许使用共享显存，正在尝试自动分配设备...")
+                    else:
+                        device_map = {"": device}
+                        print("不允许使用共享显存，模型将加载到:", device)
+
+                    # 尝试加载模型
+                    model = load_models(
+                        model_path=llm_model_path, dtype=dtype, device=device,
+                        max_memory=max_memory, device_map=device_map
+                    )
                 except RuntimeError as e:
                     if 'out of memory' in str(e).lower():
-                        if torch.cuda.is_available():
-                            print("CUDA 内存不足，尝试清理缓存并重新加载模型...")
-                            #torch.cuda.empty_cache()
-                            #gc.collect()
-                            try:
-                                model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=max_memory)
-                            except RuntimeError as e2:
-                                if 'out of memory' in str(e2).lower():
-                                    # 显存仍不足，加载模型到 CPU
-                                    device = 'cpu'
-                                    model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=None)
-                                    model_loaded_on = device
-                                    print("We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` into a higher value to use more memory (at your own risk).")
-                                else:
-                                    raise e2
+                        if allow_share_vram:
+                            print("显存不足，正在尝试使用共享显存...")
+                            model = load_models(
+                                model_path=llm_model_path, dtype=dtype, device=device,
+                                max_memory=max_memory, device_map="auto"
+                            )
+                            print("模型已使用共享显存加载。")
                         else:
+                            print("显存不足且未允许使用共享显存，加载模型失败。")
                             raise e
                     else:
                         raise e
@@ -735,15 +738,16 @@ class JoyCaption2_simple:
                 "top_p": ("FLOAT", {"default": 0.8, "min": 0, "max": 1, "step": 0.01}),
                 "temperature": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
                 "cache_model": ("BOOLEAN", {"default": False}),
+                "allow_share_vram": ("BOOLEAN", {"default": False}),
             },
             "optional": {
-                "extra_options_node": ("STRING",),  # 接收来自 ExtraOptionsNode 的单一字符串
+                "extra_options_node": ("STRING",{"forceInput": True}),  # 接收来自 ExtraOptionsNode 的单一字符串
             },    
         }
 
     def joycaption2_simple(
         self, image, llm_model, dtype, caption_type, caption_length,
-        user_prompt, max_new_tokens, top_p, temperature, cache_model,
+        user_prompt, max_new_tokens, top_p, temperature, cache_model, allow_share_vram, 
         extra_options_node=None  # 设置默认值为 None
     ):
         ret_text = [] 
@@ -776,37 +780,39 @@ class JoyCaption2_simple:
             
             if self.previous_model is None:
                 try:
-                    # 计算设备 0 的 90% 显存
                     if torch.cuda.is_available():
-                        total_mem = torch.cuda.get_device_properties(0).total_memory  # 总显存（字节）
-                        # 转换为 GiB
+                        total_mem = torch.cuda.get_device_properties(0).total_memory
                         total_mem_gib = total_mem / (1024 ** 3)
                         max_mem_gib = int(total_mem_gib * 0.9)
                         max_mem_str = f"{max_mem_gib}GiB"
                         max_memory = {0: max_mem_str}
                     else:
-                        max_memory = None  # 如果使用 CPU，则不设置 max_memory
+                        max_memory = None
 
-                    # 尝试加载模型，设置 max_memory
-                    model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=max_memory)
+                    # 根据 allow_share_vram 设置 device_map 和 max_memory
+                    if allow_share_vram:
+                        device_map = "auto"
+                        print("允许使用共享显存，正在尝试自动分配设备...")
+                    else:
+                        device_map = {"": device}
+                        print("不允许使用共享显存，模型将加载到:", device)
+
+                    # 尝试加载模型
+                    model = load_models(
+                        model_path=llm_model_path, dtype=dtype, device=device,
+                        max_memory=max_memory, device_map=device_map
+                    )
                 except RuntimeError as e:
                     if 'out of memory' in str(e).lower():
-                        if torch.cuda.is_available():
-                            print("CUDA 内存不足，尝试清理缓存并重新加载模型...")
-                            #torch.cuda.empty_cache()
-                            #gc.collect()
-                            try:
-                                model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=max_memory)
-                            except RuntimeError as e2:
-                                if 'out of memory' in str(e2).lower():
-                                    # 显存仍不足，加载模型到 CPU
-                                    device = 'cpu'
-                                    model = load_models(model_path=llm_model_path, dtype=dtype, device=device, max_memory=None)
-                                    model_loaded_on = device
-                                    print("We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` into a higher value to use more memory (at your own risk).")
-                                else:
-                                    raise e2
+                        if allow_share_vram:
+                            print("显存不足，正在尝试使用共享显存...")
+                            model = load_models(
+                                model_path=llm_model_path, dtype=dtype, device=device,
+                                max_memory=max_memory, device_map="auto"
+                            )
+                            print("模型已使用共享显存加载。")
                         else:
+                            print("显存不足且未允许使用共享显存，加载模型失败。")
                             raise e
                     else:
                         raise e
