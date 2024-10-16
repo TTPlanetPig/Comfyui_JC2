@@ -16,6 +16,7 @@ from transformers import AutoProcessor, AutoModelForCausalLM
 from huggingface_hub import snapshot_download
 import shutil
 import gc
+import comfy.model_management as mm
 
 # Define the Joy2_Model class
 class Joy2_Model:
@@ -82,7 +83,7 @@ class ImageAdapter(nn.Module):
         return self.other_tokens(torch.tensor([2], device=self.other_tokens.weight.device)).squeeze(0)
 
 # Define the model loading function
-def load_models(model_path, dtype, device="cuda", max_memory=None, device_map=None):
+def load_models(model_path, dtype, device="cuda", device_map=None):
     from transformers import AutoModel, AutoProcessor, AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast, AutoModelForCausalLM
     from peft import PeftModel
 
@@ -139,8 +140,7 @@ def load_models(model_path, dtype, device="cuda", max_memory=None, device_map=No
                 model_path, 
                 quantization_config=nf4_config,
                 device_map=device_map,  # 修改
-                torch_dtype=torch.bfloat16,
-                max_memory=max_memory
+                torch_dtype=torch.bfloat16
             ).eval()
 
             if use_lora and os.path.exists(LORA_PATH):  # omitted
@@ -189,8 +189,7 @@ def load_models(model_path, dtype, device="cuda", max_memory=None, device_map=No
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
                 device_map=device_map,  # 修改
-                torch_dtype=torch.bfloat16,
-                max_memory=max_memory
+                torch_dtype=torch.bfloat16
             ).eval()
 
             if use_lora and os.path.exists(LORA_PATH):
@@ -419,6 +418,54 @@ def free_memory():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
+        
+def take_free_memory(dev=None, torch_free_too=False):
+    global directml_enabled
+    if dev is None:
+        dev = get_torch_device()
+    elif isinstance(dev, str):
+        if dev.startswith('cuda'):
+            # 如果设备是 'cuda'，则默认使用索引 0
+            if ':' not in dev:
+                dev = torch.device('cuda:0')
+            else:
+                dev = torch.device(dev)
+        else:
+            dev = torch.device(dev)
+    elif not isinstance(dev, torch.device):
+        dev = torch.device(dev)
+
+    if hasattr(dev, 'type') and (dev.type == 'cpu' or dev.type == 'mps'):
+        mem_free_total = psutil.virtual_memory().available
+        mem_free_torch = mem_free_total
+    else:
+        if directml_enabled:
+            mem_free_total = 1024 * 1024 * 1024  # TODO: 实现 DirectML 显存检测
+            mem_free_torch = mem_free_total
+        elif is_intel_xpu():
+            stats = torch.xpu.memory_stats(dev)
+            mem_active = stats['active_bytes.all.current']
+            mem_reserved = stats['reserved_bytes.all.current']
+            mem_free_torch = mem_reserved - mem_active
+            mem_free_xpu = torch.xpu.get_device_properties(dev).total_memory - mem_reserved
+            mem_free_total = mem_free_xpu + mem_free_torch
+        else:
+            stats = torch.cuda.memory_stats(dev)
+            mem_active = stats['active_bytes.all.current']
+            mem_reserved = stats['reserved_bytes.all.current']
+            mem_free_cuda, _ = torch.cuda.mem_get_info(dev)
+            mem_free_torch = mem_reserved - mem_active
+            mem_free_total = mem_free_cuda + mem_free_torch
+
+    if torch_free_too:
+        return (mem_free_total, mem_free_torch)
+    else:
+        return mem_free_total
+        
+def cleanGPU():
+    gc.collect()
+    mm.unload_all_models()
+    mm.soft_empty_cache()
 
 def analyze_tensor(tensor: object) -> str:
     result = ''
@@ -489,7 +536,6 @@ class JoyCaption2:
                 "top_p": ("FLOAT", {"default": 0.8, "min": 0, "max": 1, "step": 0.01}),
                 "temperature": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
                 "cache_model": ("BOOLEAN", {"default": False}),
-                "allow_share_vram": ("BOOLEAN", {"default": False}),
                 "enable_extra_options": ("BOOLEAN", {"default": True, "label": "启用额外选项"}),  # 新增开关
                 **extra_options_list,  
                 "character_name": ("STRING", {"default": "", "multiline": False}),  
@@ -499,7 +545,7 @@ class JoyCaption2:
 
     def joycaption2(
         self, image, llm_model, dtype, caption_type, caption_length,
-        user_prompt, max_new_tokens, top_p, temperature, cache_model, allow_share_vram, 
+        user_prompt, max_new_tokens, top_p, temperature, cache_model,
         enable_extra_options, character_name, **extra_options  
     ):
         ret_text = [] 
@@ -532,40 +578,30 @@ class JoyCaption2:
             
             if self.previous_model is None:
                 try:
-                    if torch.cuda.is_available():
-                        total_mem = torch.cuda.get_device_properties(0).total_memory
-                        total_mem_gib = total_mem / (1024 ** 3)
-                        max_mem_gib = int(total_mem_gib * 0.9)
-                        max_mem_str = f"{max_mem_gib}GiB"
-                        max_memory = {0: max_mem_str}
-                    else:
-                        max_memory = None
-
-                    # 根据 allow_share_vram 设置 device_map 和 max_memory
-                    if allow_share_vram:
-                        device_map = "auto"
-                        print("允许使用共享显存，正在尝试自动分配设备...")
-                    else:
-                        device_map = {"": device}
-                        print("不允许使用共享显存，模型将加载到:", device)
-
                     # 尝试加载模型
+                    free_vram_bytes = mm.get_free_memory()
+                    free_vram_gb = free_vram_bytes / (1024 ** 3)
+                    print(f"Free VRAM: {free_vram_gb:.2f} GB")
+                    if dtype == 'nf4' and free_vram_gb < 10:
+                        print("Free VRAM is less than 10GB when loading 'nf4' model. Performing VRAM cleanup.")
+                        cleanGPU()
+                    elif dtype == 'bf16' and free_vram_gb < 20:
+                        print("Free VRAM is less than 20GB when loading 'bf16' model. Performing VRAM cleanup.")
+                        cleanGPU()                    
+                    device_map = "auto"
                     model = load_models(
                         model_path=llm_model_path, dtype=dtype, device=device,
-                        max_memory=max_memory, device_map=device_map
+                        device_map=device_map
                     )
                 except RuntimeError as e:
                     if 'out of memory' in str(e).lower():
-                        if allow_share_vram:
-                            print("显存不足，正在尝试使用共享显存...")
-                            model = load_models(
-                                model_path=llm_model_path, dtype=dtype, device=device,
-                                max_memory=max_memory, device_map="auto"
-                            )
-                            print("模型已使用共享显存加载。")
-                        else:
-                            print("显存不足且未允许使用共享显存，加载模型失败。")
-                            raise e
+                        print("显存不足，正在尝试使用共享显存...")
+                        model = load_models(
+                            model_path=llm_model_path, dtype=dtype, device=device,
+                            device_map="auto"
+                        )
+                        print("模型已使用共享显存加载。")
+                        raise e
                     else:
                         raise e
             else:
@@ -738,7 +774,6 @@ class JoyCaption2_simple:
                 "top_p": ("FLOAT", {"default": 0.8, "min": 0, "max": 1, "step": 0.01}),
                 "temperature": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
                 "cache_model": ("BOOLEAN", {"default": False}),
-                "allow_share_vram": ("BOOLEAN", {"default": False}),
             },
             "optional": {
                 "extra_options_node": ("STRING",{"forceInput": True}),  # 接收来自 ExtraOptionsNode 的单一字符串
@@ -747,7 +782,7 @@ class JoyCaption2_simple:
 
     def joycaption2_simple(
         self, image, llm_model, dtype, caption_type, caption_length,
-        user_prompt, max_new_tokens, top_p, temperature, cache_model, allow_share_vram, 
+        user_prompt, max_new_tokens, top_p, temperature, cache_model, 
         extra_options_node=None  # 设置默认值为 None
     ):
         ret_text = [] 
@@ -780,40 +815,30 @@ class JoyCaption2_simple:
             
             if self.previous_model is None:
                 try:
-                    if torch.cuda.is_available():
-                        total_mem = torch.cuda.get_device_properties(0).total_memory
-                        total_mem_gib = total_mem / (1024 ** 3)
-                        max_mem_gib = int(total_mem_gib * 0.9)
-                        max_mem_str = f"{max_mem_gib}GiB"
-                        max_memory = {0: max_mem_str}
-                    else:
-                        max_memory = None
-
-                    # 根据 allow_share_vram 设置 device_map 和 max_memory
-                    if allow_share_vram:
-                        device_map = "auto"
-                        print("允许使用共享显存，正在尝试自动分配设备...")
-                    else:
-                        device_map = {"": device}
-                        print("不允许使用共享显存，模型将加载到:", device)
-
                     # 尝试加载模型
+                    free_vram_bytes = mm.get_free_memory()
+                    free_vram_gb = free_vram_bytes / (1024 ** 3)
+                    print(f"Free VRAM: {free_vram_gb:.2f} GB")
+                    if dtype == 'nf4' and free_vram_gb < 10:
+                        print("Free VRAM is less than 10GB when loading 'nf4' model. Performing VRAM cleanup.")
+                        cleanGPU()
+                    elif dtype == 'bf16' and free_vram_gb < 20:
+                        print("Free VRAM is less than 20GB when loading 'bf16' model. Performing VRAM cleanup.")
+                        cleanGPU()                    
+                    device_map = "auto"
                     model = load_models(
                         model_path=llm_model_path, dtype=dtype, device=device,
-                        max_memory=max_memory, device_map=device_map
+                        device_map=device_map
                     )
                 except RuntimeError as e:
                     if 'out of memory' in str(e).lower():
-                        if allow_share_vram:
-                            print("显存不足，正在尝试使用共享显存...")
-                            model = load_models(
-                                model_path=llm_model_path, dtype=dtype, device=device,
-                                max_memory=max_memory, device_map="auto"
-                            )
-                            print("模型已使用共享显存加载。")
-                        else:
-                            print("显存不足且未允许使用共享显存，加载模型失败。")
-                            raise e
+                        print("显存不足，正在尝试使用共享显存...")
+                        model = load_models(
+                            model_path=llm_model_path, dtype=dtype, device=device,
+                            device_map="auto"
+                        )
+                        print("模型已使用共享显存加载。")
+                        raise e
                     else:
                         raise e
             else:
