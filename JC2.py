@@ -147,7 +147,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
             checkpoint = {k.replace("_orig_mod.module.", ""): v for k, v in checkpoint.items()}
             clip_model.load_state_dict(checkpoint)
             del checkpoint
-            clip_model.eval().requires_grad_(False).to(device)
+            clip_model.eval().requires_grad_(False).to(current_device)
 
             print("Loading tokenizer")
             tokenizer = AutoTokenizer.from_pretrained(os.path.join(CHECKPOINT_PATH, "text_model"), use_fast=True)
@@ -157,7 +157,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
                 quantization_config=nf4_config,
-                device_map={"": device},  # 统一使用指定设备
+                device_map={"": current_device},  # 统一使用指定设备
                 torch_dtype=torch.bfloat16
             ).eval()
 
@@ -166,7 +166,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
                 text_model = PeftModel.from_pretrained(
                     model=text_model, 
                     model_id=LORA_PATH, 
-                    device_map={"": device},  # 统一使用指定设备
+                    device_map={"": current_device},  # 统一使用指定设备
                     quantization_config=nf4_config
                 )
                 text_model = text_model.merge_and_unload(safe_merge=True)
@@ -179,11 +179,11 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
                 text_model.config.hidden_size, 
                 False, False, 38,
                 False
-            ).eval().to(device)
+            ).eval().to(current_device)
             image_adapter.load_state_dict(
-                torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=device, weights_only=False)
+                torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=current_device, weights_only=False)
             )
-            image_adapter.eval().to(device)
+            image_adapter.eval().to(current_device)
         else:  # bf16
             print("Loading in bfloat16")
             print("Loading CLIP")
@@ -191,11 +191,11 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
             clip_model = AutoModel.from_pretrained(CLIP_PATH).vision_model
             if os.path.exists(os.path.join(CHECKPOINT_PATH, "clip_model.pt")):
                 print("Loading VLM's custom vision model")
-                checkpoint = torch.load(os.path.join(CHECKPOINT_PATH, "clip_model.pt"), map_location=device, weights_only=False)
+                checkpoint = torch.load(os.path.join(CHECKPOINT_PATH, "clip_model.pt"), map_location=current_device, weights_only=False)
                 checkpoint = {k.replace("_orig_mod.module.", ""): v for k, v in checkpoint.items()}
                 clip_model.load_state_dict(checkpoint)
                 del checkpoint
-            clip_model.eval().requires_grad_(False).to(device)
+            clip_model.eval().requires_grad_(False).to(current_device)
 
             print("Loading tokenizer")
             tokenizer = AutoTokenizer.from_pretrained(os.path.join(CHECKPOINT_PATH, "text_model"), use_fast=True)
@@ -204,7 +204,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
             print(f"Loading LLM: {model_path}")
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
-                device_map={"": device},  # 统一使用指定设备
+                device_map={"": current_device},  # 统一使用指定设备
                 torch_dtype=torch.bfloat16
             ).eval()
 
@@ -213,7 +213,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
                 text_model = PeftModel.from_pretrained(
                     model=text_model, 
                     model_id=LORA_PATH, 
-                    device_map={"": device}  # 统一使用指定设备
+                    device_map={"": current_device}  # 统一使用指定设备
                 )
                 text_model = text_model.merge_and_unload(safe_merge=True)
             else:
@@ -225,9 +225,9 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
                 text_model.config.hidden_size, 
                 False, False, 38,
                 False
-            ).eval().to(device)
+            ).eval().to(current_device)
             image_adapter.load_state_dict(
-                torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=device, weights_only=False)
+                torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=current_device, weights_only=False)
             )
     except Exception as e:
         print(f"Error loading models: {e}")
@@ -240,7 +240,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
 @torch.inference_mode()
 def stream_chat(input_images: List[Image.Image], caption_type: str, caption_length: Union[str, int],
                 extra_options: list[str], name_input: str, custom_prompt: str,
-                max_new_tokens: int, top_p: float, temperature: float, batch_size: int, model: Joy2_Model, device=str):
+                max_new_tokens: int, top_p: float, temperature: float, batch_size: int, model: Joy2_Model, current_device=str):
 
     CAPTION_TYPE_MAP = {
         "Descriptive": [
@@ -335,17 +335,17 @@ def stream_chat(input_images: List[Image.Image], caption_type: str, caption_leng
                 image = input_image.resize((384, 384), Image.LANCZOS)
                 pixel_values = TVF.pil_to_tensor(image).unsqueeze(0) / 255.0
                 pixel_values = TVF.normalize(pixel_values, [0.5], [0.5])
-                pixel_values = pixel_values.to(device)
+                pixel_values = pixel_values.to(current_device)
             except ValueError as e:
                 print(f"Error processing image: {e}")
                 print("Skipping this image and continuing...")
                 continue
 
             # Embed image
-            with torch.amp.autocast_mode.autocast(device, enabled=True):
+            with torch.amp.autocast_mode.autocast(current_device, enabled=True):
                 vision_outputs = model.clip_model(pixel_values=pixel_values, output_hidden_states=True)
                 image_features = vision_outputs.hidden_states
-                embedded_images = model.image_adapter(image_features).to(device)
+                embedded_images = model.image_adapter(image_features).to(current_device)
 
             # Build the conversation
             convo = [
@@ -393,20 +393,20 @@ def stream_chat(input_images: List[Image.Image], caption_type: str, caption_leng
             preamble_len = eot_id_indices[1] - prompt_tokens.shape[0]
 
             # Embed the tokens
-            convo_embeds = model.text_model.model.embed_tokens(convo_tokens.unsqueeze(0).to(device))
+            convo_embeds = model.text_model.model.embed_tokens(convo_tokens.unsqueeze(0).to(current_device))
 
             # Construct the input
             input_embeds = torch.cat([
                 convo_embeds[:, :preamble_len],
                 embedded_images.to(dtype=convo_embeds.dtype),
                 convo_embeds[:, preamble_len:],
-            ], dim=1).to(device)
+            ], dim=1).to(current_device)
 
             input_ids = torch.cat([
                 convo_tokens[:preamble_len].unsqueeze(0),
                 torch.zeros((1, embedded_images.shape[1]), dtype=torch.long),
                 convo_tokens[preamble_len:].unsqueeze(0),
-            ], dim=1).to(device)
+            ], dim=1).to(current_device)
             attention_mask = torch.ones_like(input_ids)
 
             generate_ids = model.text_model.generate(input_ids=input_ids, inputs_embeds=input_embeds,
@@ -441,7 +441,7 @@ def take_free_memory(dev=None, torch_free_too=False):
         if dev.startswith('cuda'):
             # 如果设备是 'cuda'，则默认使用索引 0
             if ':' not in dev:
-                dev = torch.device('cuda:0')
+                dev = torch.device(current_device)
             else:
                 dev = torch.device(dev)
         else:
