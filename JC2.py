@@ -17,6 +17,7 @@ from huggingface_hub import snapshot_download
 import shutil
 import gc
 import comfy.model_management as mm
+import comfy.sd
 
 # Define the Joy2_Model class
 class Joy2_Model:
@@ -82,8 +83,25 @@ class ImageAdapter(nn.Module):
     def get_eot_embedding(self):
         return self.other_tokens(torch.tensor([2], device=self.other_tokens.weight.device)).squeeze(0)
 
-# Define the model loading function
-def load_models(model_path, dtype, device="cuda", device_map=None):
+# 设置全局设备变量
+current_device = "cuda:0"
+
+def get_torch_device_patched():
+    global current_device
+    if (
+        not torch.cuda.is_available()
+        or comfy.model_management.cpu_state == comfy.model_management.CPUState.CPU
+    ):
+        return torch.device("cpu")
+
+    return torch.device(current_device)
+
+# 覆盖ComfyUI的设备获取函数
+comfy.model_management.get_torch_device = get_torch_device_patched
+
+def load_models(model_path, dtype, device="cuda:0", device_map=None):
+    global current_device
+    current_device = device  # 设置当前设备
     from transformers import AutoModel, AutoProcessor, AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast, AutoModelForCausalLM
     from peft import PeftModel
 
@@ -96,7 +114,7 @@ def load_models(model_path, dtype, device="cuda", device_map=None):
     if os.path.exists(CLIP_PATH):
         print("Start to load existing VLM")
     else:
-        print("VLM not found locally. Downloading google/siglipso400m-patch14-384...")
+        print("VLM not found locally. Downloading google/siglip-so400m-patch14-384...")
         try:
             snapshot_download(
                 repo_id="google/siglip-so400m-patch14-384", 
@@ -139,21 +157,19 @@ def load_models(model_path, dtype, device="cuda", device_map=None):
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
                 quantization_config=nf4_config,
-                device_map=device_map,  # 修改
+                device_map={"": device},  # 统一使用指定设备
                 torch_dtype=torch.bfloat16
             ).eval()
 
-            if use_lora and os.path.exists(LORA_PATH):  # omitted
+            if use_lora and os.path.exists(LORA_PATH):
                 print("Loading VLM's custom text model")
                 text_model = PeftModel.from_pretrained(
                     model=text_model, 
                     model_id=LORA_PATH, 
-                    device_map=device if device == "cuda" else {"": device},
+                    device_map={"": device},  # 统一使用指定设备
                     quantization_config=nf4_config
                 )
-                text_model = text_model.merge_and_unload(
-                    safe_merge=True
-                )  # to avoid PEFT bug https://github.com/huggingface/transformers/issues/28515
+                text_model = text_model.merge_and_unload(safe_merge=True)
             else:
                 print("VLM's custom text model isn't loaded")
 
@@ -163,7 +179,7 @@ def load_models(model_path, dtype, device="cuda", device_map=None):
                 text_model.config.hidden_size, 
                 False, False, 38,
                 False
-            ).eval().to("cpu")
+            ).eval().to(device)
             image_adapter.load_state_dict(
                 torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=device, weights_only=False)
             )
@@ -188,7 +204,7 @@ def load_models(model_path, dtype, device="cuda", device_map=None):
             print(f"Loading LLM: {model_path}")
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
-                device_map=device_map,  # 修改
+                device_map={"": device},  # 统一使用指定设备
                 torch_dtype=torch.bfloat16
             ).eval()
 
@@ -197,11 +213,9 @@ def load_models(model_path, dtype, device="cuda", device_map=None):
                 text_model = PeftModel.from_pretrained(
                     model=text_model, 
                     model_id=LORA_PATH, 
-                    device_map=device if device == "cuda" else {"": device}
+                    device_map={"": device}  # 统一使用指定设备
                 )
-                text_model = text_model.merge_and_unload(
-                    safe_merge=True
-                )  # to avoid PEFT bug https://github.com/huggingface/transformers/issues/28515
+                text_model = text_model.merge_and_unload(safe_merge=True)
             else:
                 print("VLM's custom text model isn't loaded")
 
@@ -218,7 +232,7 @@ def load_models(model_path, dtype, device="cuda", device_map=None):
     except Exception as e:
         print(f"Error loading models: {e}")
     finally:
-        pass  # free_memory() function is not defined in the provided code
+        pass  # 可以在这里添加内存释放逻辑（如果需要）
 
     return Joy2_Model(clip_processor, clip_model, tokenizer, text_model, image_adapter)
 
@@ -503,11 +517,11 @@ class JoyCaption2:
         ]
         caption_length_list = ["any", "very short", "short", "medium-length", "long", "very long"] + [str(i) for i in range(20, 261, 5)]
         
-        # get extra_option.json path
+        # 获取extra_option.json路径
         base_dir = os.path.dirname(os.path.abspath(__file__))
         extra_option_file = os.path.join(base_dir, "extra_option.json") 
 
-        # load extra_options_list
+        # 加载extra_options_list
         extra_options_list = {}
         if os.path.isfile(extra_option_file):
             try:
@@ -517,11 +531,15 @@ class JoyCaption2:
                         option_name = item.get("name")
                         if option_name:
                             extra_options_list[option_name] = ("BOOLEAN", {"default": False})
-                            # logger.info(f"Loaded extra option: {option_name}")
             except Exception as e:
                 print(f"Error loading extra_option.json: {e}")
         else:
             print(f"extra_option.json not found at {extra_option_file}. No extra options will be available.")
+
+        # 获取可用的GPU设备列表
+        gpu_devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+        if not gpu_devices:
+            gpu_devices = ["cpu"]  # 如果没有GPU可用，则仅提供CPU选项
 
         # 定义额外的输入字段
         return {
@@ -536,21 +554,21 @@ class JoyCaption2:
                 "top_p": ("FLOAT", {"default": 0.8, "min": 0, "max": 1, "step": 0.01}),
                 "temperature": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
                 "cache_model": ("BOOLEAN", {"default": False}),
+                "device": (gpu_devices,),  # 新增GPU设备选择                
                 "enable_extra_options": ("BOOLEAN", {"default": True, "label": "启用额外选项"}),  # 新增开关
                 **extra_options_list,  
-                "character_name": ("STRING", {"default": "", "multiline": False}),  
+                "character_name": ("STRING", {"default": "", "multiline": False}),
             },
         }
- 
 
     def joycaption2(
         self, image, llm_model, dtype, caption_type, caption_length,
-        user_prompt, max_new_tokens, top_p, temperature, cache_model,
+        user_prompt, max_new_tokens, top_p, temperature, cache_model, device, 
         enable_extra_options, character_name, **extra_options  
     ):
         ret_text = [] 
         comfy_model_dir = os.path.join(folder_paths.models_dir, "LLM")
-        print(f"comfy_model_dir:{comfy_model_dir}")
+        print(f"comfy_model_dir: {comfy_model_dir}")
         if not os.path.exists(comfy_model_dir):
             os.mkdir(comfy_model_dir)
         
@@ -558,13 +576,13 @@ class JoyCaption2:
         llm_model_path = os.path.join(comfy_model_dir, sanitized_model_name)  
         llm_model_path_cache = os.path.join(comfy_model_dir, "cache--" + sanitized_model_name)
 
-        # 初始设备设置为 'cuda'
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        model_loaded_on = device  # 跟踪模型加载在哪个设备上
+        # 使用用户选择的设备
+        selected_device = device if torch.cuda.is_available() else 'cpu'
+        model_loaded_on = selected_device  # 跟踪模型加载在哪个设备上
 
         try:
             if os.path.exists(llm_model_path):
-                print(f"Start to load existing model on {device}")
+                print(f"Start to load existing model on {selected_device}")
             else:
                 print(f"Model not found locally. Downloading {llm_model}...")
                 snapshot_download(
@@ -588,17 +606,18 @@ class JoyCaption2:
                     elif dtype == 'bf16' and free_vram_gb < 20:
                         print("Free VRAM is less than 20GB when loading 'bf16' model. Performing VRAM cleanup.")
                         cleanGPU()                    
-                    device_map = "auto"
+                    # 统一使用选择的设备
+                    device_map = {"": selected_device}
                     model = load_models(
-                        model_path=llm_model_path, dtype=dtype, device=device,
+                        model_path=llm_model_path, dtype=dtype, device=selected_device,
                         device_map=device_map
                     )
                 except RuntimeError as e:
                     if 'out of memory' in str(e).lower():
                         print("显存不足，正在尝试使用共享显存...")
                         model = load_models(
-                            model_path=llm_model_path, dtype=dtype, device=device,
-                            device_map="auto"
+                            model_path=llm_model_path, dtype=dtype, device=selected_device,
+                            device_map={"": selected_device}
                         )
                         print("模型已使用共享显存加载。")
                         raise e
@@ -613,45 +632,54 @@ class JoyCaption2:
 
         print(f"Model loaded on {model_loaded_on}")
 
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        extra_option_file = os.path.join(base_dir, "extra_option.json")  # 调整为 JSON 文件的正确路径
-        extra_prompts = {}
+        extra_prompts = []
 
-        if enable_extra_options and os.path.isfile(extra_option_file):
-            try:
-                with open(extra_option_file, "r", encoding='utf-8') as f:
-                    json_content = json.load(f)
-                    for item in json_content:
-                        name = item.get("name")
-                        prompt = item.get("prompt")
-                        if name and prompt:
-                            extra_prompts[name] = prompt
-            except Exception as e:
-                print(f"Error reading extra_option.json: {e}")
-        elif not os.path.isfile(extra_option_file):
-            print(f"extra_option.json not found at {extra_option_file} during processing.")
+        if enable_extra_options:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            extra_option_file = os.path.join(base_dir, "extra_option.json")
+            if os.path.isfile(extra_option_file):
+                try:
+                    with open(extra_option_file, "r", encoding='utf-8') as f:
+                        json_content = json.load(f)
+                        for item in json_content:
+                            name = item.get("name")
+                            prompt = item.get("prompt")
+                            if name and prompt:
+                                if extra_options.get(name):
+                                    # 如果 prompt 中包含 {name}，则替换为 character_name
+                                    if "{name}" in prompt:
+                                        prompt = prompt.replace("{name}", character_name)
+                                    extra_prompts.append(prompt)
+                except Exception as e:
+                    print(f"Error reading extra_option.json: {e}")
+            else:
+                print(f"extra_option.json not found at {extra_option_file} during processing.")
 
         extra = []
         if enable_extra_options:
-            for option_name, is_enabled in extra_options.items():
-                if is_enabled and option_name in extra_prompts:
-                    extra.append(extra_prompts[option_name])
+            extra = extra_prompts
+            print(f"Extra options enabled: {extra_prompts}")  
+        else:
+            print("No extra options provided.")            
 
-            processed_images = [
-                Image.fromarray(
-                    np.clip(255.0 * img.unsqueeze(0).cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
-                ).convert('RGB')
-                for img in image
-            ]
+        processed_images = [
+            Image.fromarray(
+                np.clip(255.0 * img.unsqueeze(0).cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
+            ).convert('RGB')
+            for img in image
+        ]
 
+        try:
             captions = stream_chat(
                 processed_images, caption_type, caption_length,
                 extra, "", user_prompt,
                 max_new_tokens, top_p, temperature, len(processed_images),
-                model, device
+                model, device  # 确保传递正确的设备
             )
-
             ret_text.extend(captions)
+        except Exception as e:
+            print(f"Error during stream_chat: {e}")
+            return ("Error generating captions.",)
 
         if cache_model:
             self.previous_model = model
@@ -761,6 +789,11 @@ class JoyCaption2_simple:
             "any", "very short", "short", "medium-length", "long", "very long"
         ] + [str(i) for i in range(20, 261, 5)]
 
+        # 获取可用的GPU设备列表
+        gpu_devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+        if not gpu_devices:
+            gpu_devices = ["cpu"]  # 如果没有GPU可用，则仅提供CPU选项
+            
         # 定义额外的输入字段
         return {
             "required": {
@@ -774,6 +807,7 @@ class JoyCaption2_simple:
                 "top_p": ("FLOAT", {"default": 0.8, "min": 0, "max": 1, "step": 0.01}),
                 "temperature": ("FLOAT", {"default": 0.6, "min": 0, "max": 1, "step": 0.01}),
                 "cache_model": ("BOOLEAN", {"default": False}),
+                "device": (gpu_devices,),  # 新增GPU设备选择 
             },
             "optional": {
                 "extra_options_node": ("STRING",{"forceInput": True}),  # 接收来自 ExtraOptionsNode 的单一字符串
@@ -782,7 +816,7 @@ class JoyCaption2_simple:
 
     def joycaption2_simple(
         self, image, llm_model, dtype, caption_type, caption_length,
-        user_prompt, max_new_tokens, top_p, temperature, cache_model, 
+        user_prompt, max_new_tokens, top_p, temperature, cache_model, device, 
         extra_options_node=None  # 设置默认值为 None
     ):
         ret_text = [] 
@@ -795,13 +829,13 @@ class JoyCaption2_simple:
         llm_model_path = os.path.join(comfy_model_dir, sanitized_model_name)  
         llm_model_path_cache = os.path.join(comfy_model_dir, "cache--" + sanitized_model_name)
 
-        # 初始设备设置为 'cuda'
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        model_loaded_on = device  # 跟踪模型加载在哪个设备上
+        # 使用用户选择的设备
+        selected_device = device if torch.cuda.is_available() else 'cpu'
+        model_loaded_on = selected_device  # 跟踪模型加载在哪个设备上
 
         try:
             if os.path.exists(llm_model_path):
-                print(f"Start to load existing model on {device}")
+                print(f"Start to load existing model on {selected_device}")
             else:
                 print(f"Model not found locally. Downloading {llm_model}...")
                 snapshot_download(
@@ -825,17 +859,18 @@ class JoyCaption2_simple:
                     elif dtype == 'bf16' and free_vram_gb < 20:
                         print("Free VRAM is less than 20GB when loading 'bf16' model. Performing VRAM cleanup.")
                         cleanGPU()                    
-                    device_map = "auto"
+                    # 统一使用选择的设备
+                    device_map = {"": selected_device}
                     model = load_models(
-                        model_path=llm_model_path, dtype=dtype, device=device,
+                        model_path=llm_model_path, dtype=dtype, device=selected_device,
                         device_map=device_map
                     )
                 except RuntimeError as e:
                     if 'out of memory' in str(e).lower():
                         print("显存不足，正在尝试使用共享显存...")
                         model = load_models(
-                            model_path=llm_model_path, dtype=dtype, device=device,
-                            device_map="auto"
+                            model_path=llm_model_path, dtype=dtype, device=selected_device,
+                            device_map={"": selected_device}
                         )
                         print("模型已使用共享显存加载。")
                         raise e
@@ -886,6 +921,7 @@ class JoyCaption2_simple:
             free_memory()
 
         return (ret_text,)
+
         
 # Register the node
 NODE_CLASS_MAPPINGS = {
