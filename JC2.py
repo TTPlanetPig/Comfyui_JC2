@@ -242,6 +242,15 @@ def stream_chat(input_images: List[Image.Image], caption_type: str, caption_leng
                 extra_options: list[str], name_input: str, custom_prompt: str,
                 max_new_tokens: int, top_p: float, temperature: float, batch_size: int, model: Joy2_Model, current_device=str):
 
+    # 确定 chat_device
+    if 'cuda' in current_device:
+        chat_device = 'cuda'
+    elif 'cpu' in current_device:
+        chat_device = 'cpu'
+    else:
+        raise ValueError(f"Unsupported device type: {current_device}")
+
+
     CAPTION_TYPE_MAP = {
         "Descriptive": [
             "Write a descriptive caption for this image in a formal tone.",
@@ -335,17 +344,17 @@ def stream_chat(input_images: List[Image.Image], caption_type: str, caption_leng
                 image = input_image.resize((384, 384), Image.LANCZOS)
                 pixel_values = TVF.pil_to_tensor(image).unsqueeze(0) / 255.0
                 pixel_values = TVF.normalize(pixel_values, [0.5], [0.5])
-                pixel_values = pixel_values.to(current_device)
+                pixel_values = pixel_values.to(chat_device)
             except ValueError as e:
                 print(f"Error processing image: {e}")
                 print("Skipping this image and continuing...")
                 continue
 
             # Embed image
-            with torch.amp.autocast_mode.autocast(current_device, enabled=True):
+            with torch.amp.autocast_mode.autocast(chat_device, enabled=True):
                 vision_outputs = model.clip_model(pixel_values=pixel_values, output_hidden_states=True)
                 image_features = vision_outputs.hidden_states
-                embedded_images = model.image_adapter(image_features).to(current_device)
+                embedded_images = model.image_adapter(image_features).to(chat_device)
 
             # Build the conversation
             convo = [
@@ -400,13 +409,13 @@ def stream_chat(input_images: List[Image.Image], caption_type: str, caption_leng
                 convo_embeds[:, :preamble_len],
                 embedded_images.to(dtype=convo_embeds.dtype),
                 convo_embeds[:, preamble_len:],
-            ], dim=1).to(current_device)
+            ], dim=1).to(chat_device)
 
             input_ids = torch.cat([
                 convo_tokens[:preamble_len].unsqueeze(0),
                 torch.zeros((1, embedded_images.shape[1]), dtype=torch.long),
                 convo_tokens[preamble_len:].unsqueeze(0),
-            ], dim=1).to(current_device)
+            ], dim=1).to(chat_device)
             attention_mask = torch.ones_like(input_ids)
 
             generate_ids = model.text_model.generate(input_ids=input_ids, inputs_embeds=input_embeds,
@@ -563,7 +572,7 @@ class JoyCaption2:
 
         except Exception as e:
             print(f"Error loading model: {e}")
-            return "Error loading model."
+            return None
 
         print(f"Model loaded on {model_loaded_on}")
 
@@ -614,7 +623,7 @@ class JoyCaption2:
             ret_text.extend(captions)
         except Exception as e:
             print(f"Error during stream_chat: {e}")
-            return "Error loading model."
+            return None
 
         if cache_model:
             self.previous_model = model
@@ -805,7 +814,7 @@ class JoyCaption2_simple:
 
         except Exception as e:
             print(f"Error loading model: {e}")
-            return "Error loading model."
+            return None
 
         print(f"Model loaded on {model_loaded_on}")
 
