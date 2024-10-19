@@ -143,7 +143,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
             clip_model = AutoModel.from_pretrained(CLIP_PATH).vision_model
 
             print("Loading VLM's custom vision model")
-            checkpoint = torch.load(os.path.join(CHECKPOINT_PATH, "clip_model.pt"), map_location='cpu', weights_only=False)
+            checkpoint = torch.load(os.path.join(CHECKPOINT_PATH, "clip_model.pt"), map_location=current_device, weights_only=False)
             checkpoint = {k.replace("_orig_mod.module.", ""): v for k, v in checkpoint.items()}
             clip_model.load_state_dict(checkpoint)
             del checkpoint
@@ -157,7 +157,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
                 quantization_config=nf4_config,
-                device_map={"": current_device},  # 统一使用指定设备
+                device_map=current_device,  # 统一使用指定设备
                 torch_dtype=torch.bfloat16
             ).eval()
 
@@ -166,7 +166,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
                 text_model = PeftModel.from_pretrained(
                     model=text_model, 
                     model_id=LORA_PATH, 
-                    device_map={"": current_device},  # 统一使用指定设备
+                    device_map=current_device,  # 统一使用指定设备
                     quantization_config=nf4_config
                 )
                 text_model = text_model.merge_and_unload(safe_merge=True)
@@ -179,7 +179,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
                 text_model.config.hidden_size, 
                 False, False, 38,
                 False
-            ).eval().to(current_device)
+            ).eval().to("cpu")
             image_adapter.load_state_dict(
                 torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=current_device, weights_only=False)
             )
@@ -204,7 +204,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
             print(f"Loading LLM: {model_path}")
             text_model = AutoModelForCausalLM.from_pretrained(
                 model_path, 
-                device_map={"": current_device},  # 统一使用指定设备
+                device_map=current_device,  # 统一使用指定设备
                 torch_dtype=torch.bfloat16
             ).eval()
 
@@ -213,7 +213,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
                 text_model = PeftModel.from_pretrained(
                     model=text_model, 
                     model_id=LORA_PATH, 
-                    device_map={"": current_device}  # 统一使用指定设备
+                    device_map=current_device  # 统一使用指定设备
                 )
                 text_model = text_model.merge_and_unload(safe_merge=True)
             else:
@@ -230,7 +230,7 @@ def load_models(model_path, dtype, device="cuda:0", device_map=None):
                 torch.load(os.path.join(CHECKPOINT_PATH, "image_adapter.pt"), map_location=current_device, weights_only=False)
             )
     except Exception as e:
-        print(f"Error loading models: {e}")
+        print(f"Error loading models: {e}", )
     finally:
         pass  # 可以在这里添加内存释放逻辑（如果需要）
 
@@ -433,65 +433,11 @@ def free_memory():
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
         
-def take_free_memory(dev=None, torch_free_too=False):
-    global directml_enabled
-    if dev is None:
-        dev = get_torch_device()
-    elif isinstance(dev, str):
-        if dev.startswith('cuda'):
-            # 如果设备是 'cuda'，则默认使用索引 0
-            if ':' not in dev:
-                dev = torch.device(current_device)
-            else:
-                dev = torch.device(dev)
-        else:
-            dev = torch.device(dev)
-    elif not isinstance(dev, torch.device):
-        dev = torch.device(dev)
 
-    if hasattr(dev, 'type') and (dev.type == 'cpu' or dev.type == 'mps'):
-        mem_free_total = psutil.virtual_memory().available
-        mem_free_torch = mem_free_total
-    else:
-        if directml_enabled:
-            mem_free_total = 1024 * 1024 * 1024  # TODO: 实现 DirectML 显存检测
-            mem_free_torch = mem_free_total
-        elif is_intel_xpu():
-            stats = torch.xpu.memory_stats(dev)
-            mem_active = stats['active_bytes.all.current']
-            mem_reserved = stats['reserved_bytes.all.current']
-            mem_free_torch = mem_reserved - mem_active
-            mem_free_xpu = torch.xpu.get_device_properties(dev).total_memory - mem_reserved
-            mem_free_total = mem_free_xpu + mem_free_torch
-        else:
-            stats = torch.cuda.memory_stats(dev)
-            mem_active = stats['active_bytes.all.current']
-            mem_reserved = stats['reserved_bytes.all.current']
-            mem_free_cuda, _ = torch.cuda.mem_get_info(dev)
-            mem_free_torch = mem_reserved - mem_active
-            mem_free_total = mem_free_cuda + mem_free_torch
-
-    if torch_free_too:
-        return (mem_free_total, mem_free_torch)
-    else:
-        return mem_free_total
-        
 def cleanGPU():
     gc.collect()
     mm.unload_all_models()
     mm.soft_empty_cache()
-
-def analyze_tensor(tensor: object) -> str:
-    result = ''
-    if isinstance(tensor, torch.Tensor):
-        result += f"\n Dimensions: {tensor.dim()}, First dimension size: {tensor.shape[0]} \n"
-        for idx, t in enumerate(tensor):
-            image = Image.fromarray(np.clip(255.0 * t.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))
-            result += f'\n Index {idx}: Image dimensions = {image.size}, Mode = {image.mode}, Tensor dims = {t.dim()}, '
-            result += ', '.join([f'Dimension {j} size = {t.shape[j]}' for j in range(t.dim())])
-    else:
-        result = f"analyze_tensor: Input is not a tensor, found {type(tensor)} instead"
-    return result
             
 
 class JoyCaption2:
@@ -607,28 +553,17 @@ class JoyCaption2:
                         print("Free VRAM is less than 20GB when loading 'bf16' model. Performing VRAM cleanup.")
                         cleanGPU()                    
                     # 统一使用选择的设备
-                    device_map = {"": selected_device}
                     model = load_models(
-                        model_path=llm_model_path, dtype=dtype, device=selected_device,
-                        device_map=device_map
+                        model_path=llm_model_path, dtype=dtype, device=selected_device
                     )
-                except RuntimeError as e:
-                    if 'out of memory' in str(e).lower():
-                        print("显存不足，正在尝试使用共享显存...")
-                        model = load_models(
-                            model_path=llm_model_path, dtype=dtype, device=selected_device,
-                            device_map={"": selected_device}
-                        )
-                        print("模型已使用共享显存加载。")
-                        raise e
-                    else:
-                        raise e
+                except RuntimeError:
+                    print("An error occurred while loading the model. Please check your configuration.")
             else:
                 model = self.previous_model
 
         except Exception as e:
             print(f"Error loading model: {e}")
-            return ("Error loading model.",)
+            return "Error loading model."
 
         print(f"Model loaded on {model_loaded_on}")
 
@@ -679,7 +614,7 @@ class JoyCaption2:
             ret_text.extend(captions)
         except Exception as e:
             print(f"Error during stream_chat: {e}")
-            return ("Error generating captions.",)
+            return "Error loading model."
 
         if cache_model:
             self.previous_model = model
@@ -860,28 +795,17 @@ class JoyCaption2_simple:
                         print("Free VRAM is less than 20GB when loading 'bf16' model. Performing VRAM cleanup.")
                         cleanGPU()                    
                     # 统一使用选择的设备
-                    device_map = {"": selected_device}
+
                     model = load_models(
-                        model_path=llm_model_path, dtype=dtype, device=selected_device,
-                        device_map=device_map
-                    )
-                except RuntimeError as e:
-                    if 'out of memory' in str(e).lower():
-                        print("显存不足，正在尝试使用共享显存...")
-                        model = load_models(
-                            model_path=llm_model_path, dtype=dtype, device=selected_device,
-                            device_map={"": selected_device}
-                        )
-                        print("模型已使用共享显存加载。")
-                        raise e
-                    else:
-                        raise e
+                        model_path=llm_model_path, dtype=dtype, device=selected_device)
+                except RuntimeError:
+                    print("An error occurred while loading the model. Please check your configuration.")
             else:
                 model = self.previous_model
 
         except Exception as e:
             print(f"Error loading model: {e}")
-            return ("Error loading model.",)
+            return "Error loading model."
 
         print(f"Model loaded on {model_loaded_on}")
 
