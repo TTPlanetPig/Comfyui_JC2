@@ -28,7 +28,7 @@ git clone https://github.com/TTPlanetPig/Comfyui_JC2
 I will assume you have the pytorch ready in your PC, in case you don't, install from here: 
 ```shell
 pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121  
-# (NOT Recommended if you don't familar with embeded python)
+# (NOT Recommended if you don't familiar with embeded python)
 ```
 # Model preparation:
 
