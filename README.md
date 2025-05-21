@@ -3,10 +3,13 @@
 > 💡 支持 Alpha Two 与全新 Beta One 模型  
 > 🎮 一键部署 / 自动下载（Beta One 模型无需手动放置）  
 > 📦 GitHub Repo: https://github.com/TTPlanetPig/Comfyui_JC2
+>
+> Comfyui workflow example：
+> https://github.com/TTPlanetPig/Comfyui_JC2/blob/main/example/JoyCaption%20Beta_One_example.png
 
 ---
 
-## 🌟 简介
+## 🌟 简介(这里为旧的Joy Caption Alpha Two介绍，已过时）
 
 这是为 [ComfyUI](https://github.com/comfyanonymous/ComfyUI) 封装的 Joy Caption 节点：
 
