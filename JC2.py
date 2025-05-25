@@ -813,8 +813,9 @@ class JoyCaption2_simple:
                 model = self.previous_model
 
         except Exception as e:
-            print(f"Error loading model: {e}")
-            return None
+            # print(f"Error loading model: {e}")
+            raise Exception(f"Error loading model: {e}")
+            # return None
 
         print(f"Model loaded on {model_loaded_on}")
 
